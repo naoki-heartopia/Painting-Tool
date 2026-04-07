@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Painting Tool - Image Resizer</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>画像リサイズ & パレット量子化</h1>
+
+      <section class="controls">
+        <label>
+          画像アップロード
+          <input
+            id="imageInput"
+            type="file"
+            accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+          />
+        </label>
+
+        <label>
+          出力比率
+          <select id="ratioSelect">
+            <option value="16:9">16:9</option>
+            <option value="4:3">4:3</option>
+            <option value="1:1">1:1</option>
+            <option value="3:4">3:4</option>
+            <option value="9:16">9:16</option>
+          </select>
+        </label>
+
+        <label>
+          出力サイズ
+          <select id="sizeSelect">
+            <option value="1280x720">1280 x 720 (HD)</option>
+            <option value="1920x1080">1920 x 1080 (Full HD)</option>
+            <option value="1024x768">1024 x 768 (XGA)</option>
+            <option value="1080x1080">1080 x 1080 (Square)</option>
+            <option value="768x1024">768 x 1024 (Portrait)</option>
+            <option value="1080x1920">1080 x 1920 (Story)</option>
+          </select>
+        </label>
+
+        <label>
+          拡大縮小モード
+          <select id="fitModeSelect">
+            <option value="fit">フィット</option>
+            <option value="fill">フィル</option>
+            <option value="stretch">ストレッチ</option>
+          </select>
+        </label>
+
+        <button id="runButton" type="button">実行</button>
+        <button id="downloadButton" type="button" disabled>PNG ダウンロード</button>
+      </section>
+
+      <section class="preview">
+        <h2>出力プレビュー</h2>
+        <canvas id="outputCanvas" width="1280" height="720"></canvas>
+      </section>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
