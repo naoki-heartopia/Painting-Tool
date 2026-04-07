@@ -182,15 +182,16 @@ const viewTransform = {
   cropY: 0.5,
   panX: 0,
   panY: 0,
+  zoom: 1,
 };
 const pointerState = {
-  isPointerDown: false,
-  pointerId: null,
-  startX: 0,
-  startY: 0,
-  lastX: 0,
-  lastY: 0,
+  activePointers: new Map(),
+  pinchStartDistance: 0,
+  pinchStartZoom: 1,
 };
+
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 5.0;
 
 export function loadImage(file) {
   if (!(file instanceof File)) {
@@ -221,8 +222,9 @@ function normalizeCropCoordinate(value) {
 
 function resolveFillSourceRect(image, targetWidth, targetHeight, transform = {}) {
   const scale = Math.max(targetWidth / image.width, targetHeight / image.height);
-  const sourceWidth = targetWidth / scale;
-  const sourceHeight = targetHeight / scale;
+  const safeZoom = clamp(Number.isFinite(transform.zoom) ? transform.zoom : 1, MIN_ZOOM, MAX_ZOOM);
+  const sourceWidth = targetWidth / scale / safeZoom;
+  const sourceHeight = targetHeight / scale / safeZoom;
   const maxSourceX = Math.max(0, image.width - sourceWidth);
   const maxSourceY = Math.max(0, image.height - sourceHeight);
 
@@ -245,6 +247,30 @@ function resolveFillSourceRect(image, targetWidth, targetHeight, transform = {})
     maxSourceX,
     maxSourceY,
   };
+}
+
+function clampPanAxis(pan, imageSize, sourceSize) {
+  const halfTravel = Math.max(0, (imageSize - sourceSize) / 2);
+  return clamp(Number.isFinite(pan) ? pan : 0, -halfTravel, halfTravel);
+}
+
+function clampViewTransformForFill(image, targetWidth, targetHeight) {
+  const sourceRect = resolveFillSourceRect(image, targetWidth, targetHeight, viewTransform);
+  viewTransform.panX = clampPanAxis(viewTransform.panX, image.width, sourceRect.sourceWidth);
+  viewTransform.panY = clampPanAxis(viewTransform.panY, image.height, sourceRect.sourceHeight);
+
+  const maxSourceX = sourceRect.maxSourceX;
+  const maxSourceY = sourceRect.maxSourceY;
+  if (maxSourceX > 0) {
+    viewTransform.cropX = normalizeCropCoordinate(
+      (((image.width - sourceRect.sourceWidth) / 2) + viewTransform.panX) / maxSourceX,
+    );
+  }
+  if (maxSourceY > 0) {
+    viewTransform.cropY = normalizeCropCoordinate(
+      (((image.height - sourceRect.sourceHeight) / 2) + viewTransform.panY) / maxSourceY,
+    );
+  }
 }
 
 export function resizeToTarget(image, targetWidth, targetHeight, mode = 'fit', transform = {}) {
@@ -560,6 +586,7 @@ imageInput.addEventListener('change', () => {
   viewTransform.cropY = 0.5;
   viewTransform.panX = 0;
   viewTransform.panY = 0;
+  viewTransform.zoom = 1;
   scheduleRenderPreview();
 });
 ratioSelect.addEventListener('change', () => {
@@ -579,21 +606,38 @@ downloadButton.addEventListener('click', () => {
 });
 
 function updatePointerStateFromEvent(event) {
-  pointerState.lastX = event.offsetX;
-  pointerState.lastY = event.offsetY;
+  pointerState.activePointers.set(event.pointerId, { x: event.offsetX, y: event.offsetY });
+}
+
+function removePointerFromState(event) {
+  pointerState.activePointers.delete(event.pointerId);
+  if (pointerState.activePointers.size < 2) {
+    pointerState.pinchStartDistance = 0;
+    pointerState.pinchStartZoom = viewTransform.zoom;
+  }
+}
+
+function getActivePointers() {
+  return Array.from(pointerState.activePointers.values());
+}
+
+function getPointerDistance(firstPointer, secondPointer) {
+  return Math.hypot(secondPointer.x - firstPointer.x, secondPointer.y - firstPointer.y);
 }
 
 function onCanvasPointerDown(event) {
-  pointerState.isPointerDown = true;
-  pointerState.pointerId = event.pointerId;
-  pointerState.startX = event.offsetX;
-  pointerState.startY = event.offsetY;
   updatePointerStateFromEvent(event);
   outputCanvas.setPointerCapture(event.pointerId);
+
+  if (pointerState.activePointers.size === 2) {
+    const [firstPointer, secondPointer] = getActivePointers();
+    pointerState.pinchStartDistance = getPointerDistance(firstPointer, secondPointer);
+    pointerState.pinchStartZoom = viewTransform.zoom;
+  }
 }
 
 function onCanvasPointerMove(event) {
-  if (!pointerState.isPointerDown || pointerState.pointerId !== event.pointerId) {
+  if (!pointerState.activePointers.has(event.pointerId)) {
     return;
   }
 
@@ -603,48 +647,42 @@ function onCanvasPointerMove(event) {
     return;
   }
 
-  const sourceRect = resolveFillSourceRect(sourceImage, selectedSize.width, selectedSize.height, viewTransform);
-  const deltaX = event.offsetX - pointerState.lastX;
-  const deltaY = event.offsetY - pointerState.lastY;
-  const outputToSourceScaleX = sourceRect.sourceWidth / selectedSize.width;
-  const outputToSourceScaleY = sourceRect.sourceHeight / selectedSize.height;
-
-  viewTransform.panX = clamp(
-    viewTransform.panX - deltaX * outputToSourceScaleX,
-    -((sourceImage.width - sourceRect.sourceWidth) / 2),
-    (sourceImage.width - sourceRect.sourceWidth) / 2,
-  );
-  viewTransform.panY = clamp(
-    viewTransform.panY - deltaY * outputToSourceScaleY,
-    -((sourceImage.height - sourceRect.sourceHeight) / 2),
-    (sourceImage.height - sourceRect.sourceHeight) / 2,
-  );
-
-  const maxSourceX = sourceRect.maxSourceX;
-  const maxSourceY = sourceRect.maxSourceY;
-  if (maxSourceX > 0) {
-    viewTransform.cropX = normalizeCropCoordinate(
-      (((sourceImage.width - sourceRect.sourceWidth) / 2) + viewTransform.panX) / maxSourceX,
-    );
-  }
-  if (maxSourceY > 0) {
-    viewTransform.cropY = normalizeCropCoordinate(
-      (((sourceImage.height - sourceRect.sourceHeight) / 2) + viewTransform.panY) / maxSourceY,
-    );
-  }
-
+  const previousPointer = pointerState.activePointers.get(event.pointerId);
   updatePointerStateFromEvent(event);
-  scheduleRenderPreview();
-}
+  const activePointers = getActivePointers();
 
-function resetPointerState(event) {
-  if (pointerState.pointerId !== event.pointerId) {
+  if (activePointers.length === 1 && previousPointer) {
+    const sourceRect = resolveFillSourceRect(sourceImage, selectedSize.width, selectedSize.height, viewTransform);
+    const deltaX = event.offsetX - previousPointer.x;
+    const deltaY = event.offsetY - previousPointer.y;
+    const outputToSourceScaleX = sourceRect.sourceWidth / selectedSize.width;
+    const outputToSourceScaleY = sourceRect.sourceHeight / selectedSize.height;
+
+    viewTransform.panX -= deltaX * outputToSourceScaleX;
+    viewTransform.panY -= deltaY * outputToSourceScaleY;
+    clampViewTransformForFill(sourceImage, selectedSize.width, selectedSize.height);
+    scheduleRenderPreview();
     return;
   }
 
-  pointerState.isPointerDown = false;
-  pointerState.pointerId = null;
-  updatePointerStateFromEvent(event);
+  if (activePointers.length >= 2) {
+    const [firstPointer, secondPointer] = activePointers;
+    const currentDistance = getPointerDistance(firstPointer, secondPointer);
+    if (pointerState.pinchStartDistance <= 0) {
+      pointerState.pinchStartDistance = currentDistance;
+      pointerState.pinchStartZoom = viewTransform.zoom;
+      return;
+    }
+
+    const distanceRatio = currentDistance / pointerState.pinchStartDistance;
+    viewTransform.zoom = clamp(pointerState.pinchStartZoom * distanceRatio, MIN_ZOOM, MAX_ZOOM);
+    clampViewTransformForFill(sourceImage, selectedSize.width, selectedSize.height);
+    scheduleRenderPreview();
+  }
+}
+
+function resetPointerState(event) {
+  removePointerFromState(event);
 }
 
 outputCanvas.addEventListener('pointerdown', onCanvasPointerDown);
