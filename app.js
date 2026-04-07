@@ -181,8 +181,8 @@ const DEFAULT_PALETTE = DEFAULT_PALETTE_HEX.map(hexToRgb);
 
 let sourceImage = null;
 let cachedFile = null;
-let renderPreviewFastDebounceTimer = null;
-let renderPreviewFinalDebounceTimer = null;
+let renderRafId = null;
+let renderPreviewFinalIdleTimer = null;
 const viewTransform = {
   cropX: 0.5,
   cropY: 0.5,
@@ -650,26 +650,28 @@ async function renderPreviewFinal() {
   }
 }
 
-function scheduleRenderPreviewFast() {
-  if (renderPreviewFastDebounceTimer) {
-    clearTimeout(renderPreviewFastDebounceTimer);
+function scheduleRenderPreview() {
+  if (renderRafId !== null) {
+    return;
   }
 
-  renderPreviewFastDebounceTimer = setTimeout(() => {
-    renderPreviewFastDebounceTimer = null;
+  renderRafId = requestAnimationFrame(() => {
+    renderRafId = null;
     renderPreviewFast();
-  }, 16);
+  });
 }
 
 function scheduleRenderPreviewFinal() {
-  if (renderPreviewFinalDebounceTimer) {
-    clearTimeout(renderPreviewFinalDebounceTimer);
+  scheduleRenderPreview();
+
+  if (renderPreviewFinalIdleTimer) {
+    clearTimeout(renderPreviewFinalIdleTimer);
   }
 
-  renderPreviewFinalDebounceTimer = setTimeout(() => {
-    renderPreviewFinalDebounceTimer = null;
+  renderPreviewFinalIdleTimer = setTimeout(() => {
+    renderPreviewFinalIdleTimer = null;
     renderPreviewFinal();
-  }, 100);
+  }, 120);
 }
 
 const sliderInitialValueMap = new Map([
@@ -816,7 +818,7 @@ function onCanvasPointerMove(event) {
     viewTransform.panX -= deltaX * outputToSourceScaleX;
     viewTransform.panY -= deltaY * outputToSourceScaleY;
     clampViewTransformForFill(sourceImage, selectedSize.width, selectedSize.height);
-    scheduleRenderPreviewFast();
+    scheduleRenderPreview();
     return;
   }
 
@@ -832,7 +834,7 @@ function onCanvasPointerMove(event) {
     const distanceRatio = currentDistance / pointerState.pinchStartDistance;
     viewTransform.zoom = clamp(pointerState.pinchStartZoom * distanceRatio, MIN_ZOOM, MAX_ZOOM);
     clampViewTransformForFill(sourceImage, selectedSize.width, selectedSize.height);
-    scheduleRenderPreviewFast();
+    scheduleRenderPreview();
   }
 }
 
