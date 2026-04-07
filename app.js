@@ -181,7 +181,8 @@ const DEFAULT_PALETTE = DEFAULT_PALETTE_HEX.map(hexToRgb);
 
 let sourceImage = null;
 let cachedFile = null;
-let renderDebounceTimer = null;
+let renderPreviewFastDebounceTimer = null;
+let renderPreviewFinalDebounceTimer = null;
 const viewTransform = {
   cropX: 0.5,
   cropY: 0.5,
@@ -567,13 +568,13 @@ function rebuildSizeOptionsForRatio(ratio) {
   }
 }
 
-async function renderPreview() {
+async function preparePreviewBaseCanvas() {
   try {
     const file = imageInput.files?.[0];
     if (!file) {
       outputCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
       downloadButton.disabled = true;
-      return;
+      return null;
     }
 
     if (cachedFile !== file || !sourceImage) {
@@ -587,16 +588,45 @@ async function renderPreview() {
     if (!validateRatio(selectedSize, ratioSelect.value)) {
       outputCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
       downloadButton.disabled = true;
-      return;
+      return null;
     }
 
-    const resizedCanvas = resizeToTarget(
+    return resizeToTarget(
       sourceImage,
       selectedSize.width,
       selectedSize.height,
       mode,
       viewTransform,
     );
+  } catch (error) {
+    alert(error instanceof Error ? error.message : '画像処理中にエラーが発生しました。');
+    return null;
+  }
+}
+
+function drawPreviewCanvas(canvas) {
+  outputCanvas.width = canvas.width;
+  outputCanvas.height = canvas.height;
+  outputCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+  outputCtx.drawImage(canvas, 0, 0);
+}
+
+async function renderPreviewFast() {
+  const resizedCanvas = await preparePreviewBaseCanvas();
+  if (!resizedCanvas) {
+    return;
+  }
+
+  drawPreviewCanvas(resizedCanvas);
+}
+
+async function renderPreviewFinal() {
+  try {
+    const resizedCanvas = await preparePreviewBaseCanvas();
+    if (!resizedCanvas) {
+      return;
+    }
+
     applyColorAdjustments(resizedCanvas, {
       brightness: Number(brightnessRange.value),
       contrast: Number(contrastRange.value),
@@ -613,25 +643,32 @@ async function renderPreview() {
       ditherMethod: ditherMethodSelect.value,
     });
 
-    outputCanvas.width = processedCanvas.width;
-    outputCanvas.height = processedCanvas.height;
-    outputCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
-    outputCtx.drawImage(processedCanvas, 0, 0);
-
+    drawPreviewCanvas(processedCanvas);
     downloadButton.disabled = false;
   } catch (error) {
     alert(error instanceof Error ? error.message : '画像処理中にエラーが発生しました。');
   }
 }
 
-function scheduleRenderPreview() {
-  if (renderDebounceTimer) {
-    clearTimeout(renderDebounceTimer);
+function scheduleRenderPreviewFast() {
+  if (renderPreviewFastDebounceTimer) {
+    clearTimeout(renderPreviewFastDebounceTimer);
   }
 
-  renderDebounceTimer = setTimeout(() => {
-    renderDebounceTimer = null;
-    renderPreview();
+  renderPreviewFastDebounceTimer = setTimeout(() => {
+    renderPreviewFastDebounceTimer = null;
+    renderPreviewFast();
+  }, 16);
+}
+
+function scheduleRenderPreviewFinal() {
+  if (renderPreviewFinalDebounceTimer) {
+    clearTimeout(renderPreviewFinalDebounceTimer);
+  }
+
+  renderPreviewFinalDebounceTimer = setTimeout(() => {
+    renderPreviewFinalDebounceTimer = null;
+    renderPreviewFinal();
   }, 100);
 }
 
@@ -669,7 +706,7 @@ function resetSliderToInitialValue(slider) {
 
   slider.value = initialValue;
   triggerSliderResetFeedback(slider);
-  scheduleRenderPreview();
+  scheduleRenderPreviewFinal();
 }
 
 function onSliderPointerUp(event) {
@@ -693,7 +730,7 @@ function onSliderPointerUp(event) {
 
 function initializeSliderResetHandlers() {
   for (const slider of sliderInitialValueMap.keys()) {
-    slider.addEventListener('input', scheduleRenderPreview);
+    slider.addEventListener('input', scheduleRenderPreviewFinal);
     slider.addEventListener('dblclick', () => resetSliderToInitialValue(slider));
     slider.addEventListener('pointerup', onSliderPointerUp);
   }
@@ -707,16 +744,16 @@ imageInput.addEventListener('change', () => {
   viewTransform.panX = 0;
   viewTransform.panY = 0;
   viewTransform.zoom = 1;
-  scheduleRenderPreview();
+  scheduleRenderPreviewFinal();
 });
 ratioSelect.addEventListener('change', () => {
   rebuildSizeOptionsForRatio(ratioSelect.value);
-  scheduleRenderPreview();
+  scheduleRenderPreviewFinal();
 });
-sizeSelect.addEventListener('change', scheduleRenderPreview);
-fitModeSelect.addEventListener('change', scheduleRenderPreview);
-ditherToggle.addEventListener('change', scheduleRenderPreview);
-ditherMethodSelect.addEventListener('change', scheduleRenderPreview);
+sizeSelect.addEventListener('change', scheduleRenderPreviewFinal);
+fitModeSelect.addEventListener('change', scheduleRenderPreviewFinal);
+ditherToggle.addEventListener('change', scheduleRenderPreviewFinal);
+ditherMethodSelect.addEventListener('change', scheduleRenderPreviewFinal);
 initializeSliderResetHandlers();
 
 downloadButton.addEventListener('click', () => {
@@ -779,7 +816,7 @@ function onCanvasPointerMove(event) {
     viewTransform.panX -= deltaX * outputToSourceScaleX;
     viewTransform.panY -= deltaY * outputToSourceScaleY;
     clampViewTransformForFill(sourceImage, selectedSize.width, selectedSize.height);
-    scheduleRenderPreview();
+    scheduleRenderPreviewFast();
     return;
   }
 
@@ -795,12 +832,13 @@ function onCanvasPointerMove(event) {
     const distanceRatio = currentDistance / pointerState.pinchStartDistance;
     viewTransform.zoom = clamp(pointerState.pinchStartZoom * distanceRatio, MIN_ZOOM, MAX_ZOOM);
     clampViewTransformForFill(sourceImage, selectedSize.width, selectedSize.height);
-    scheduleRenderPreview();
+    scheduleRenderPreviewFast();
   }
 }
 
 function resetPointerState(event) {
   removePointerFromState(event);
+  scheduleRenderPreviewFinal();
 }
 
 outputCanvas.addEventListener('pointerdown', onCanvasPointerDown);
