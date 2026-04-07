@@ -768,7 +768,8 @@ async function renderPreviewFinal(generation) {
 }
 
 function scheduleRenderPreview(generation) {
-  pendingFastRenderGeneration = generation;
+  const normalizedGeneration = Number.isFinite(generation) ? generation : renderGeneration;
+  pendingFastRenderGeneration = normalizedGeneration;
   if (renderRafId !== null) {
     return;
   }
@@ -966,7 +967,8 @@ function onCanvasPointerMove(event) {
     viewTransform.panX -= deltaX * outputToSourceScaleX;
     viewTransform.panY -= deltaY * outputToSourceScaleY;
     clampViewTransformForFill(sourceImage, selectedSize.width, selectedSize.height);
-    scheduleRenderPreview();
+    const generation = nextRenderGeneration(false);
+    scheduleRenderPreview(generation);
     return;
   }
 
@@ -982,7 +984,8 @@ function onCanvasPointerMove(event) {
     const distanceRatio = currentDistance / pointerState.pinchStartDistance;
     viewTransform.zoom = clamp(pointerState.pinchStartZoom * distanceRatio, MIN_ZOOM, MAX_ZOOM);
     clampViewTransformForFill(sourceImage, selectedSize.width, selectedSize.height);
-    scheduleRenderPreview();
+    const generation = nextRenderGeneration(false);
+    scheduleRenderPreview(generation);
   }
 }
 
