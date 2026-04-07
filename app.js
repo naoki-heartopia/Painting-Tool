@@ -183,6 +183,10 @@ let sourceImage = null;
 let cachedFile = null;
 let renderRafId = null;
 let renderPreviewFinalIdleTimer = null;
+let processedBaseCanvas = null;
+let processedBaseColorKey = '';
+let processedBaseSourceImage = null;
+let colorTransformDirty = true;
 const viewTransform = {
   cropX: 0.5,
   cropY: 0.5,
@@ -201,6 +205,49 @@ const MAX_ZOOM = 5.0;
 const DOUBLE_TAP_THRESHOLD_MS = 300;
 const SLIDER_RESET_FEEDBACK_DURATION_MS = 500;
 const sliderLastPointerUpAt = new WeakMap();
+
+function getViewTransformState() {
+  return {
+    ratio: ratioSelect.value,
+    size: sizeSelect.value,
+    fitMode: fitModeSelect.value,
+    cropX: viewTransform.cropX,
+    cropY: viewTransform.cropY,
+    panX: viewTransform.panX,
+    panY: viewTransform.panY,
+    zoom: viewTransform.zoom,
+  };
+}
+
+function getColorTransformState() {
+  return {
+    brightness: Number(brightnessRange.value),
+    contrast: Number(contrastRange.value),
+    temperature: Number(temperatureRange.value),
+    saturation: Number(saturationRange.value),
+    whitePoint: Number(whitePointRange.value),
+    highlights: Number(highlightsRange.value),
+    shadows: Number(shadowsRange.value),
+    blackPoint: Number(blackPointRange.value),
+    dither: ditherToggle.checked,
+    ditherMethod: ditherMethodSelect.value,
+  };
+}
+
+function getColorTransformKey() {
+  return JSON.stringify(getColorTransformState());
+}
+
+function invalidateProcessedBaseCanvas() {
+  processedBaseCanvas = null;
+  processedBaseColorKey = '';
+  processedBaseSourceImage = null;
+  colorTransformDirty = true;
+}
+
+function markColorTransformDirty() {
+  colorTransformDirty = true;
+}
 
 export function loadImage(file) {
   if (!(file instanceof File)) {
@@ -580,6 +627,7 @@ async function preparePreviewBaseCanvas() {
     if (cachedFile !== file || !sourceImage) {
       sourceImage = await loadImage(file);
       cachedFile = file;
+      invalidateProcessedBaseCanvas();
     }
 
     const selectedSize = parseSize(sizeSelect.value);
@@ -591,13 +639,11 @@ async function preparePreviewBaseCanvas() {
       return null;
     }
 
-    return resizeToTarget(
-      sourceImage,
-      selectedSize.width,
-      selectedSize.height,
+    return {
+      selectedSize,
       mode,
-      viewTransform,
-    );
+      viewState: getViewTransformState(),
+    };
   } catch (error) {
     alert(error instanceof Error ? error.message : '画像処理中にエラーが発生しました。');
     return null;
@@ -611,39 +657,120 @@ function drawPreviewCanvas(canvas) {
   outputCtx.drawImage(canvas, 0, 0);
 }
 
+function renderWithProcessedBaseCanvas(baseCanvas, targetWidth, targetHeight, mode, transform = {}) {
+  const previewCanvas = document.createElement('canvas');
+  previewCanvas.width = targetWidth;
+  previewCanvas.height = targetHeight;
+  const ctx = previewCanvas.getContext('2d');
+
+  if (mode === 'stretch') {
+    ctx.drawImage(baseCanvas, 0, 0, targetWidth, targetHeight);
+    return previewCanvas;
+  }
+
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, targetWidth, targetHeight);
+
+  if (mode === 'fill') {
+    const sourceRect = resolveFillSourceRect(baseCanvas, targetWidth, targetHeight, transform);
+    ctx.drawImage(
+      baseCanvas,
+      sourceRect.sourceX,
+      sourceRect.sourceY,
+      sourceRect.sourceWidth,
+      sourceRect.sourceHeight,
+      0,
+      0,
+      targetWidth,
+      targetHeight,
+    );
+    return previewCanvas;
+  }
+
+  const scale = Math.min(targetWidth / baseCanvas.width, targetHeight / baseCanvas.height);
+  const drawWidth = baseCanvas.width * scale;
+  const drawHeight = baseCanvas.height * scale;
+  const offsetX = (targetWidth - drawWidth) / 2;
+  const offsetY = (targetHeight - drawHeight) / 2;
+  ctx.drawImage(baseCanvas, offsetX, offsetY, drawWidth, drawHeight);
+
+  return previewCanvas;
+}
+
+function ensureProcessedBaseCanvas(forceRebuild = false) {
+  if (!sourceImage) {
+    return null;
+  }
+
+  const colorKey = getColorTransformKey();
+  const shouldRebuild = forceRebuild
+    || !processedBaseCanvas
+    || processedBaseSourceImage !== sourceImage
+    || processedBaseColorKey !== colorKey
+    || colorTransformDirty;
+
+  if (!shouldRebuild) {
+    return processedBaseCanvas;
+  }
+
+  const baseCanvas = document.createElement('canvas');
+  baseCanvas.width = sourceImage.width;
+  baseCanvas.height = sourceImage.height;
+  const ctx = baseCanvas.getContext('2d');
+  ctx.drawImage(sourceImage, 0, 0);
+
+  applyColorAdjustments(baseCanvas, getColorTransformState());
+  quantizeToPalette(baseCanvas, undefined, getColorTransformState());
+
+  processedBaseCanvas = baseCanvas;
+  processedBaseSourceImage = sourceImage;
+  processedBaseColorKey = colorKey;
+  colorTransformDirty = false;
+
+  return processedBaseCanvas;
+}
+
 async function renderPreviewFast() {
-  const resizedCanvas = await preparePreviewBaseCanvas();
-  if (!resizedCanvas) {
+  const renderContext = await preparePreviewBaseCanvas();
+  if (!renderContext) {
     return;
   }
 
-  drawPreviewCanvas(resizedCanvas);
+  const baseCanvas = processedBaseCanvas ?? ensureProcessedBaseCanvas(true);
+  if (!baseCanvas) {
+    return;
+  }
+
+  const previewCanvas = renderWithProcessedBaseCanvas(
+    baseCanvas,
+    renderContext.selectedSize.width,
+    renderContext.selectedSize.height,
+    renderContext.mode,
+    renderContext.viewState,
+  );
+  drawPreviewCanvas(previewCanvas);
 }
 
 async function renderPreviewFinal() {
   try {
-    const resizedCanvas = await preparePreviewBaseCanvas();
-    if (!resizedCanvas) {
+    const renderContext = await preparePreviewBaseCanvas();
+    if (!renderContext) {
       return;
     }
 
-    applyColorAdjustments(resizedCanvas, {
-      brightness: Number(brightnessRange.value),
-      contrast: Number(contrastRange.value),
-      temperature: Number(temperatureRange.value),
-      saturation: Number(saturationRange.value),
-      whitePoint: Number(whitePointRange.value),
-      highlights: Number(highlightsRange.value),
-      shadows: Number(shadowsRange.value),
-      blackPoint: Number(blackPointRange.value),
-    });
+    const baseCanvas = ensureProcessedBaseCanvas(colorTransformDirty);
+    if (!baseCanvas) {
+      return;
+    }
 
-    const processedCanvas = quantizeToPalette(resizedCanvas, undefined, {
-      dither: ditherToggle.checked,
-      ditherMethod: ditherMethodSelect.value,
-    });
-
-    drawPreviewCanvas(processedCanvas);
+    const previewCanvas = renderWithProcessedBaseCanvas(
+      baseCanvas,
+      renderContext.selectedSize.width,
+      renderContext.selectedSize.height,
+      renderContext.mode,
+      renderContext.viewState,
+    );
+    drawPreviewCanvas(previewCanvas);
     downloadButton.disabled = false;
   } catch (error) {
     alert(error instanceof Error ? error.message : '画像処理中にエラーが発生しました。');
@@ -732,7 +859,10 @@ function onSliderPointerUp(event) {
 
 function initializeSliderResetHandlers() {
   for (const slider of sliderInitialValueMap.keys()) {
-    slider.addEventListener('input', scheduleRenderPreviewFinal);
+    slider.addEventListener('input', () => {
+      markColorTransformDirty();
+      scheduleRenderPreviewFinal();
+    });
     slider.addEventListener('dblclick', () => resetSliderToInitialValue(slider));
     slider.addEventListener('pointerup', onSliderPointerUp);
   }
@@ -741,6 +871,7 @@ function initializeSliderResetHandlers() {
 imageInput.addEventListener('change', () => {
   sourceImage = null;
   cachedFile = null;
+  invalidateProcessedBaseCanvas();
   viewTransform.cropX = 0.5;
   viewTransform.cropY = 0.5;
   viewTransform.panX = 0;
@@ -754,8 +885,14 @@ ratioSelect.addEventListener('change', () => {
 });
 sizeSelect.addEventListener('change', scheduleRenderPreviewFinal);
 fitModeSelect.addEventListener('change', scheduleRenderPreviewFinal);
-ditherToggle.addEventListener('change', scheduleRenderPreviewFinal);
-ditherMethodSelect.addEventListener('change', scheduleRenderPreviewFinal);
+ditherToggle.addEventListener('change', () => {
+  markColorTransformDirty();
+  scheduleRenderPreviewFinal();
+});
+ditherMethodSelect.addEventListener('change', () => {
+  markColorTransformDirty();
+  scheduleRenderPreviewFinal();
+});
 initializeSliderResetHandlers();
 
 downloadButton.addEventListener('click', () => {
