@@ -197,6 +197,9 @@ const pointerState = {
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 5.0;
+const DOUBLE_TAP_THRESHOLD_MS = 300;
+const SLIDER_RESET_FEEDBACK_DURATION_MS = 500;
+const sliderLastPointerUpAt = new WeakMap();
 
 export function loadImage(file) {
   if (!(file instanceof File)) {
@@ -632,6 +635,70 @@ function scheduleRenderPreview() {
   }, 100);
 }
 
+const sliderInitialValueMap = new Map([
+  [brightnessRange, brightnessRange.defaultValue],
+  [contrastRange, contrastRange.defaultValue],
+  [temperatureRange, temperatureRange.defaultValue],
+  [saturationRange, saturationRange.defaultValue],
+  [whitePointRange, whitePointRange.defaultValue],
+  [highlightsRange, highlightsRange.defaultValue],
+  [shadowsRange, shadowsRange.defaultValue],
+  [blackPointRange, blackPointRange.defaultValue],
+]);
+
+function triggerSliderResetFeedback(slider) {
+  const sliderLabel = slider.closest('label');
+  if (!sliderLabel) {
+    return;
+  }
+
+  sliderLabel.classList.remove('slider-reset-feedback');
+  void sliderLabel.offsetWidth;
+  sliderLabel.classList.add('slider-reset-feedback');
+
+  setTimeout(() => {
+    sliderLabel.classList.remove('slider-reset-feedback');
+  }, SLIDER_RESET_FEEDBACK_DURATION_MS);
+}
+
+function resetSliderToInitialValue(slider) {
+  const initialValue = sliderInitialValueMap.get(slider);
+  if (typeof initialValue !== 'string') {
+    return;
+  }
+
+  slider.value = initialValue;
+  triggerSliderResetFeedback(slider);
+  scheduleRenderPreview();
+}
+
+function onSliderPointerUp(event) {
+  const slider = event.currentTarget;
+  if (!(slider instanceof HTMLInputElement)) {
+    return;
+  }
+
+  if (event.pointerType === 'mouse') {
+    return;
+  }
+
+  const now = event.timeStamp;
+  const lastPointerUpAt = sliderLastPointerUpAt.get(slider) ?? 0;
+  sliderLastPointerUpAt.set(slider, now);
+
+  if (now - lastPointerUpAt <= DOUBLE_TAP_THRESHOLD_MS) {
+    resetSliderToInitialValue(slider);
+  }
+}
+
+function initializeSliderResetHandlers() {
+  for (const slider of sliderInitialValueMap.keys()) {
+    slider.addEventListener('input', scheduleRenderPreview);
+    slider.addEventListener('dblclick', () => resetSliderToInitialValue(slider));
+    slider.addEventListener('pointerup', onSliderPointerUp);
+  }
+}
+
 imageInput.addEventListener('change', () => {
   sourceImage = null;
   cachedFile = null;
@@ -650,14 +717,7 @@ sizeSelect.addEventListener('change', scheduleRenderPreview);
 fitModeSelect.addEventListener('change', scheduleRenderPreview);
 ditherToggle.addEventListener('change', scheduleRenderPreview);
 ditherMethodSelect.addEventListener('change', scheduleRenderPreview);
-brightnessRange.addEventListener('input', scheduleRenderPreview);
-contrastRange.addEventListener('input', scheduleRenderPreview);
-temperatureRange.addEventListener('input', scheduleRenderPreview);
-saturationRange.addEventListener('input', scheduleRenderPreview);
-whitePointRange.addEventListener('input', scheduleRenderPreview);
-highlightsRange.addEventListener('input', scheduleRenderPreview);
-shadowsRange.addEventListener('input', scheduleRenderPreview);
-blackPointRange.addEventListener('input', scheduleRenderPreview);
+initializeSliderResetHandlers();
 
 downloadButton.addEventListener('click', () => {
   exportPng(outputCanvas, 'resized-quantized.png');

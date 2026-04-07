@@ -30,6 +30,20 @@ label {
   font-size: 0.95rem;
 }
 
+label.slider-reset-feedback {
+  animation: slider-reset-flash 0.5s ease;
+}
+
+@keyframes slider-reset-flash {
+  0%,
+  100% {
+    color: inherit;
+  }
+  40% {
+    color: #ffd36a;
+  }
+}
+
 input,
 select,
 button {
