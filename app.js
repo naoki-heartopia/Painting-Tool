@@ -196,6 +196,9 @@ const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 5.0;
 const DOUBLE_TAP_THRESHOLD_MS = 300;
 const SLIDER_RESET_FEEDBACK_DURATION_MS = 500;
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png'];
+const MAX_IMAGE_FILE_SIZE_BYTES = 20 * 1024 * 1024;
+const MAX_IMAGE_PIXELS = 40 * 1000 * 1000;
 const sliderLastPointerUpAt = new WeakMap();
 const supportsWorkerPipeline = typeof Worker !== 'undefined'
   && typeof OffscreenCanvas !== 'undefined'
@@ -313,6 +316,24 @@ function markColorTransformDirty() {
   rejectAndCleanupPendingWorkerRequests();
 }
 
+function formatMiB(bytes) {
+  return `${(bytes / (1024 * 1024)).toFixed(0)}MB`;
+}
+
+function formatMegaPixels(pixels) {
+  return `${(pixels / (1000 * 1000)).toFixed(0)}MP`;
+}
+
+function getImageValidationRequirementsMessage() {
+  return `許可形式: JPEG/PNG（${ALLOWED_IMAGE_TYPES.join(' / ')}）、容量上限: ${formatMiB(MAX_IMAGE_FILE_SIZE_BYTES)}、解像度上限: ${formatMegaPixels(MAX_IMAGE_PIXELS)}（4,000万画素）`;
+}
+
+function handleImageValidationFailure(message) {
+  invalidateProcessedBaseCanvas();
+  downloadButton.disabled = true;
+  alert(`${message}\n\n${getImageValidationRequirementsMessage()}`);
+}
+
 export function loadImage(file) {
   if (!(file instanceof File)) {
     return Promise.reject(new Error('有効な画像ファイルを選択してください。'));
@@ -324,7 +345,14 @@ export function loadImage(file) {
     reader.onload = () => {
       const img = new Image();
       img.onerror = () => reject(new Error('画像データの解析に失敗しました。'));
-      img.onload = () => resolve(img);
+      img.onload = () => {
+        const totalPixels = img.width * img.height;
+        if (totalPixels > MAX_IMAGE_PIXELS) {
+          reject(new Error(`画像の解像度が上限を超えています（${img.width}x${img.height}）。`));
+          return;
+        }
+        resolve(img);
+      };
       img.src = String(reader.result);
     };
     reader.readAsDataURL(file);
@@ -538,7 +566,8 @@ async function preparePreviewBaseCanvas() {
       viewState: getViewTransformState(),
     };
   } catch (error) {
-    alert(error instanceof Error ? error.message : '画像処理中にエラーが発生しました。');
+    const errorMessage = error instanceof Error ? error.message : '画像処理中にエラーが発生しました。';
+    handleImageValidationFailure(errorMessage);
     return null;
   }
 }
@@ -842,6 +871,23 @@ imageInput.addEventListener('change', () => {
   viewTransform.panX = 0;
   viewTransform.panY = 0;
   viewTransform.zoom = 1;
+
+  const file = imageInput.files?.[0];
+  if (!file) {
+    scheduleRenderPreviewFinal();
+    return;
+  }
+
+  if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+    handleImageValidationFailure(`対応していない形式です: ${file.type || '不明な形式'}`);
+    return;
+  }
+
+  if (file.size > MAX_IMAGE_FILE_SIZE_BYTES) {
+    handleImageValidationFailure(`ファイルサイズが上限を超えています: ${formatMiB(file.size)}`);
+    return;
+  }
+
   scheduleRenderPreviewFinal();
 });
 ratioSelect.addEventListener('change', () => {
