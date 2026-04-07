@@ -186,6 +186,8 @@ let renderPreviewFinalIdleTimer = null;
 let processedBaseCanvas = null;
 let processedBaseColorKey = '';
 let processedBaseSourceImage = null;
+let processedBaseBuildPromise = null;
+let processedBaseBuildKey = '';
 let colorTransformDirty = true;
 const viewTransform = {
   cropX: 0.5,
@@ -205,6 +207,42 @@ const MAX_ZOOM = 5.0;
 const DOUBLE_TAP_THRESHOLD_MS = 300;
 const SLIDER_RESET_FEEDBACK_DURATION_MS = 500;
 const sliderLastPointerUpAt = new WeakMap();
+const supportsWorkerPipeline = typeof Worker !== 'undefined'
+  && typeof OffscreenCanvas !== 'undefined'
+  && typeof createImageBitmap === 'function';
+const imageWorker = supportsWorkerPipeline
+  ? new Worker(new URL('./image-worker.js', import.meta.url), { type: 'module' })
+  : null;
+let workerRequestId = 0;
+const workerPendingRequests = new Map();
+
+if (imageWorker) {
+  imageWorker.addEventListener('message', (event) => {
+    const { requestId, bitmap, error } = event.data ?? {};
+    const pending = workerPendingRequests.get(requestId);
+    if (!pending) {
+      if (bitmap?.close) {
+        bitmap.close();
+      }
+      return;
+    }
+
+    workerPendingRequests.delete(requestId);
+    if (error) {
+      pending.reject(new Error(error));
+      return;
+    }
+
+    pending.resolve(bitmap);
+  });
+  imageWorker.addEventListener('error', (event) => {
+    const fallbackError = event?.message ?? 'ワーカーでの処理中にエラーが発生しました。';
+    for (const pending of workerPendingRequests.values()) {
+      pending.reject(new Error(fallbackError));
+    }
+    workerPendingRequests.clear();
+  });
+}
 
 function getViewTransformState() {
   return {
@@ -242,6 +280,8 @@ function invalidateProcessedBaseCanvas() {
   processedBaseCanvas = null;
   processedBaseColorKey = '';
   processedBaseSourceImage = null;
+  processedBaseBuildPromise = null;
+  processedBaseBuildKey = '';
   colorTransformDirty = true;
 }
 
@@ -697,7 +737,50 @@ function renderWithProcessedBaseCanvas(baseCanvas, targetWidth, targetHeight, mo
   return previewCanvas;
 }
 
-function ensureProcessedBaseCanvas(forceRebuild = false) {
+async function ensureProcessedBaseCanvas(forceRebuild = false) {
+  const buildBaseCanvasFromMainThread = () => {
+    const fallbackCanvas = document.createElement('canvas');
+    fallbackCanvas.width = sourceImage.width;
+    fallbackCanvas.height = sourceImage.height;
+    const fallbackCtx = fallbackCanvas.getContext('2d');
+    fallbackCtx.drawImage(sourceImage, 0, 0);
+
+    applyColorAdjustments(fallbackCanvas, getColorTransformState());
+    quantizeToPalette(fallbackCanvas, undefined, getColorTransformState());
+    return fallbackCanvas;
+  };
+
+  const buildBaseCanvasFromWorker = async () => {
+    if (!imageWorker) {
+      return buildBaseCanvasFromMainThread();
+    }
+
+    const sourceBitmap = await createImageBitmap(sourceImage);
+    const requestId = ++workerRequestId;
+
+    const processedBitmap = await new Promise((resolve, reject) => {
+      workerPendingRequests.set(requestId, { resolve, reject });
+      imageWorker.postMessage(
+        {
+          requestId,
+          bitmap: sourceBitmap,
+          adjustments: getColorTransformState(),
+          palette: DEFAULT_PALETTE,
+          ditherConfig: DITHER_CONFIG,
+        },
+        [sourceBitmap],
+      );
+    });
+
+    const workerCanvas = document.createElement('canvas');
+    workerCanvas.width = processedBitmap.width;
+    workerCanvas.height = processedBitmap.height;
+    const workerCtx = workerCanvas.getContext('2d');
+    workerCtx.drawImage(processedBitmap, 0, 0);
+    processedBitmap.close?.();
+    return workerCanvas;
+  };
+
   if (!sourceImage) {
     return null;
   }
@@ -713,21 +796,33 @@ function ensureProcessedBaseCanvas(forceRebuild = false) {
     return processedBaseCanvas;
   }
 
-  const baseCanvas = document.createElement('canvas');
-  baseCanvas.width = sourceImage.width;
-  baseCanvas.height = sourceImage.height;
-  const ctx = baseCanvas.getContext('2d');
-  ctx.drawImage(sourceImage, 0, 0);
+  if (processedBaseBuildPromise && processedBaseBuildKey === colorKey && !forceRebuild) {
+    return processedBaseBuildPromise;
+  }
 
-  applyColorAdjustments(baseCanvas, getColorTransformState());
-  quantizeToPalette(baseCanvas, undefined, getColorTransformState());
+  processedBaseBuildKey = colorKey;
+  const buildPromise = (async () => {
+    let baseCanvas;
+    try {
+      baseCanvas = await buildBaseCanvasFromWorker();
+    } catch (error) {
+      baseCanvas = buildBaseCanvasFromMainThread();
+    }
 
-  processedBaseCanvas = baseCanvas;
-  processedBaseSourceImage = sourceImage;
-  processedBaseColorKey = colorKey;
-  colorTransformDirty = false;
+    processedBaseCanvas = baseCanvas;
+    processedBaseSourceImage = sourceImage;
+    processedBaseColorKey = colorKey;
+    colorTransformDirty = false;
+    return processedBaseCanvas;
+  })();
+  processedBaseBuildPromise = buildPromise;
 
-  return processedBaseCanvas;
+  return buildPromise.finally(() => {
+    if (processedBaseBuildPromise === buildPromise) {
+      processedBaseBuildPromise = null;
+      processedBaseBuildKey = '';
+    }
+  });
 }
 
 async function renderPreviewFast() {
@@ -736,7 +831,7 @@ async function renderPreviewFast() {
     return;
   }
 
-  const baseCanvas = processedBaseCanvas ?? ensureProcessedBaseCanvas(true);
+  const baseCanvas = processedBaseCanvas ?? await ensureProcessedBaseCanvas(true);
   if (!baseCanvas) {
     return;
   }
@@ -758,7 +853,7 @@ async function renderPreviewFinal() {
       return;
     }
 
-    const baseCanvas = ensureProcessedBaseCanvas(colorTransformDirty);
+    const baseCanvas = await ensureProcessedBaseCanvas(colorTransformDirty);
     if (!baseCanvas) {
       return;
     }
