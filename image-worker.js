@@ -17,7 +17,7 @@ function quantizeToPaletteData(data, width, height, palette, options, config = D
 }
 
 self.addEventListener('message', (event) => {
-  const { requestId, bitmap, adjustments, palette, ditherConfig } = event.data ?? {};
+  const { requestId, generation, bitmap, adjustments, palette, ditherConfig } = event.data ?? {};
 
   try {
     const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
@@ -34,8 +34,8 @@ self.addEventListener('message', (event) => {
     ctx.putImageData(imageData, 0, 0);
     const processedBitmap = canvas.transferToImageBitmap();
 
-    self.postMessage({ requestId, bitmap: processedBitmap }, [processedBitmap]);
+    self.postMessage({ requestId, generation, bitmap: processedBitmap }, [processedBitmap]);
   } catch (error) {
-    self.postMessage({ requestId, error: error instanceof Error ? error.message : 'ワーカーでの画像処理に失敗しました。' });
+    self.postMessage({ requestId, generation, error: error instanceof Error ? error.message : 'ワーカーでの画像処理に失敗しました。' });
   }
 });

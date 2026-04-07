@@ -154,7 +154,7 @@ const DEFAULT_PALETTE_HEX = [
   '#593046',
 ];
 
-unction hexToRgb(hex) {
+function hexToRgb(hex) {
   const normalizedHex = hex.trim().replace(/^#/, '');
   if (!/^[0-9a-fA-F]{6}$/.test(normalizedHex)) {
     throw new Error(`無効な16進カラーコードです: ${hex}`);
@@ -204,11 +204,36 @@ const imageWorker = supportsWorkerPipeline
   ? new Worker(new URL('./image-worker.js', import.meta.url), { type: 'module' })
   : null;
 let workerRequestId = 0;
+let renderGeneration = 0;
 const workerPendingRequests = new Map();
+let pendingFastRenderGeneration = 0;
+let pendingFinalRenderGeneration = 0;
+
+
+function createStaleRenderError() {
+  const error = new Error('古いレンダー結果を破棄しました。');
+  error.name = 'StaleRenderGenerationError';
+  return error;
+}
+
+function rejectAndCleanupPendingWorkerRequests(reason = '新しいレンダー要求により以前の処理をキャンセルしました。') {
+  for (const pending of workerPendingRequests.values()) {
+    pending.reject(new Error(reason));
+  }
+  workerPendingRequests.clear();
+}
+
+function nextRenderGeneration(shouldCleanupPending = false) {
+  renderGeneration += 1;
+  if (shouldCleanupPending) {
+    rejectAndCleanupPendingWorkerRequests();
+  }
+  return renderGeneration;
+}
 
 if (imageWorker) {
   imageWorker.addEventListener('message', (event) => {
-    const { requestId, bitmap, error } = event.data ?? {};
+    const { requestId, generation, bitmap, error } = event.data ?? {};
     const pending = workerPendingRequests.get(requestId);
     if (!pending) {
       if (bitmap?.close) {
@@ -218,6 +243,14 @@ if (imageWorker) {
     }
 
     workerPendingRequests.delete(requestId);
+
+    const responseGeneration = Number.isFinite(generation) ? generation : pending.generation;
+    if (responseGeneration !== renderGeneration) {
+      bitmap?.close?.();
+      pending.reject(createStaleRenderError());
+      return;
+    }
+
     if (error) {
       pending.reject(new Error(error));
       return;
@@ -277,6 +310,7 @@ function invalidateProcessedBaseCanvas() {
 
 function markColorTransformDirty() {
   colorTransformDirty = true;
+  rejectAndCleanupPendingWorkerRequests();
 }
 
 export function loadImage(file) {
@@ -576,12 +610,14 @@ async function ensureProcessedBaseCanvas(forceRebuild = false) {
 
     const sourceBitmap = await createImageBitmap(sourceImage);
     const requestId = ++workerRequestId;
+    const requestGeneration = renderGeneration;
 
     const processedBitmap = await new Promise((resolve, reject) => {
-      workerPendingRequests.set(requestId, { resolve, reject });
+      workerPendingRequests.set(requestId, { resolve, reject, generation: requestGeneration });
       imageWorker.postMessage(
         {
           requestId,
+          generation: requestGeneration,
           bitmap: sourceBitmap,
           adjustments: getColorTransformState(),
           palette: DEFAULT_PALETTE,
@@ -625,7 +661,14 @@ async function ensureProcessedBaseCanvas(forceRebuild = false) {
     try {
       baseCanvas = await buildBaseCanvasFromWorker();
     } catch (error) {
+      if (error instanceof Error && error.name === 'StaleRenderGenerationError') {
+        return null;
+      }
       baseCanvas = buildBaseCanvasFromMainThread();
+    }
+
+    if (!baseCanvas) {
+      return null;
     }
 
     processedBaseCanvas = baseCanvas;
@@ -644,7 +687,7 @@ async function ensureProcessedBaseCanvas(forceRebuild = false) {
   });
 }
 
-async function renderPreviewFast() {
+async function renderPreviewFast(generation) {
   const renderContext = await preparePreviewBaseCanvas();
   if (!renderContext) {
     return;
@@ -662,10 +705,12 @@ async function renderPreviewFast() {
     renderContext.mode,
     renderContext.viewState,
   );
-  drawPreviewCanvas(previewCanvas);
+  if (generation === renderGeneration) {
+    drawPreviewCanvas(previewCanvas);
+  }
 }
 
-async function renderPreviewFinal() {
+async function renderPreviewFinal(generation) {
   try {
     const renderContext = await preparePreviewBaseCanvas();
     if (!renderContext) {
@@ -684,34 +729,39 @@ async function renderPreviewFinal() {
       renderContext.mode,
       renderContext.viewState,
     );
-    drawPreviewCanvas(previewCanvas);
-    downloadButton.disabled = false;
+    if (generation === renderGeneration) {
+      drawPreviewCanvas(previewCanvas);
+      downloadButton.disabled = false;
+    }
   } catch (error) {
     alert(error instanceof Error ? error.message : '画像処理中にエラーが発生しました。');
   }
 }
 
-function scheduleRenderPreview() {
+function scheduleRenderPreview(generation) {
+  pendingFastRenderGeneration = generation;
   if (renderRafId !== null) {
     return;
   }
 
   renderRafId = requestAnimationFrame(() => {
     renderRafId = null;
-    renderPreviewFast();
+    renderPreviewFast(pendingFastRenderGeneration);
   });
 }
 
 function scheduleRenderPreviewFinal() {
-  scheduleRenderPreview();
+  const generation = nextRenderGeneration();
+  scheduleRenderPreview(generation);
 
   if (renderPreviewFinalIdleTimer) {
     clearTimeout(renderPreviewFinalIdleTimer);
   }
 
+  pendingFinalRenderGeneration = generation;
   renderPreviewFinalIdleTimer = setTimeout(() => {
     renderPreviewFinalIdleTimer = null;
-    renderPreviewFinal();
+    renderPreviewFinal(pendingFinalRenderGeneration);
   }, 120);
 }
 
@@ -783,6 +833,7 @@ function initializeSliderResetHandlers() {
 }
 
 imageInput.addEventListener('change', () => {
+  rejectAndCleanupPendingWorkerRequests();
   sourceImage = null;
   cachedFile = null;
   invalidateProcessedBaseCanvas();
