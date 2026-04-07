@@ -7,6 +7,11 @@ const ditherMethodSelect = document.getElementById('ditherMethodSelect');
 const brightnessRange = document.getElementById('brightnessRange');
 const contrastRange = document.getElementById('contrastRange');
 const temperatureRange = document.getElementById('temperatureRange');
+const saturationRange = document.getElementById('saturationRange');
+const whitePointRange = document.getElementById('whitePointRange');
+const highlightsRange = document.getElementById('highlightsRange');
+const shadowsRange = document.getElementById('shadowsRange');
+const blackPointRange = document.getElementById('blackPointRange');
 const downloadButton = document.getElementById('downloadButton');
 const outputCanvas = document.getElementById('outputCanvas');
 const outputCtx = outputCanvas.getContext('2d');
@@ -446,7 +451,16 @@ export function quantizeToPalette(
 
 export function applyColorAdjustments(
   canvas,
-  { brightness = 0, contrast = 0, temperature = 0 } = {},
+  {
+    brightness = 0,
+    contrast = 0,
+    temperature = 0,
+    saturation = 0,
+    whitePoint = 0,
+    highlights = 0,
+    shadows = 0,
+    blackPoint = 0,
+  } = {},
 ) {
   const ctx = canvas.getContext('2d');
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -456,6 +470,11 @@ export function applyColorAdjustments(
   const contrastFactor = (259 * (contrast + 255)) / (255 * (259 - contrast));
   const temperatureOffset = (temperature / 100) * 64;
   const greenTemperatureOffset = temperatureOffset * 0.2;
+  const saturationFactor = 1 + saturation / 100;
+  const whitePointAmount = (whitePoint / 100) * 64;
+  const highlightsAmount = (highlights / 100) * 80;
+  const shadowsAmount = (shadows / 100) * 80;
+  const blackPointAmount = (blackPoint / 100) * 64;
 
   for (let i = 0; i < data.length; i += 4) {
     const brightR = data[i] + brightnessOffset;
@@ -466,9 +485,38 @@ export function applyColorAdjustments(
     const contrastedG = (brightG - 128) * contrastFactor + 128;
     const contrastedB = (brightB - 128) * contrastFactor + 128;
 
-    data[i] = clampToByte(contrastedR + temperatureOffset);
-    data[i + 1] = clampToByte(contrastedG + greenTemperatureOffset);
-    data[i + 2] = clampToByte(contrastedB - temperatureOffset);
+    let adjustedR = contrastedR + temperatureOffset;
+    let adjustedG = contrastedG + greenTemperatureOffset;
+    let adjustedB = contrastedB - temperatureOffset;
+
+    const luma = 0.2126 * adjustedR + 0.7152 * adjustedG + 0.0722 * adjustedB;
+    const highlightMask = clamp((luma - 128) / 127, 0, 1);
+    const shadowMask = clamp((128 - luma) / 128, 0, 1);
+
+    adjustedR += whitePointAmount * highlightMask;
+    adjustedG += whitePointAmount * highlightMask;
+    adjustedB += whitePointAmount * highlightMask;
+
+    adjustedR += blackPointAmount * shadowMask;
+    adjustedG += blackPointAmount * shadowMask;
+    adjustedB += blackPointAmount * shadowMask;
+
+    adjustedR += highlightsAmount * highlightMask;
+    adjustedG += highlightsAmount * highlightMask;
+    adjustedB += highlightsAmount * highlightMask;
+
+    adjustedR += shadowsAmount * shadowMask;
+    adjustedG += shadowsAmount * shadowMask;
+    adjustedB += shadowsAmount * shadowMask;
+
+    const tonalLuma = 0.2126 * adjustedR + 0.7152 * adjustedG + 0.0722 * adjustedB;
+    adjustedR = tonalLuma + (adjustedR - tonalLuma) * saturationFactor;
+    adjustedG = tonalLuma + (adjustedG - tonalLuma) * saturationFactor;
+    adjustedB = tonalLuma + (adjustedB - tonalLuma) * saturationFactor;
+
+    data[i] = clampToByte(adjustedR);
+    data[i + 1] = clampToByte(adjustedG);
+    data[i + 2] = clampToByte(adjustedB);
   }
 
   ctx.putImageData(imageData, 0, 0);
@@ -550,6 +598,11 @@ async function renderPreview() {
       brightness: Number(brightnessRange.value),
       contrast: Number(contrastRange.value),
       temperature: Number(temperatureRange.value),
+      saturation: Number(saturationRange.value),
+      whitePoint: Number(whitePointRange.value),
+      highlights: Number(highlightsRange.value),
+      shadows: Number(shadowsRange.value),
+      blackPoint: Number(blackPointRange.value),
     });
 
     const processedCanvas = quantizeToPalette(resizedCanvas, undefined, {
@@ -600,6 +653,11 @@ ditherMethodSelect.addEventListener('change', scheduleRenderPreview);
 brightnessRange.addEventListener('input', scheduleRenderPreview);
 contrastRange.addEventListener('input', scheduleRenderPreview);
 temperatureRange.addEventListener('input', scheduleRenderPreview);
+saturationRange.addEventListener('input', scheduleRenderPreview);
+whitePointRange.addEventListener('input', scheduleRenderPreview);
+highlightsRange.addEventListener('input', scheduleRenderPreview);
+shadowsRange.addEventListener('input', scheduleRenderPreview);
+blackPointRange.addEventListener('input', scheduleRenderPreview);
 
 downloadButton.addEventListener('click', () => {
   exportPng(outputCanvas, 'resized-quantized.png');
