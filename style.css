@@ -39,6 +39,28 @@ button {
 
 button {
   cursor: pointer;
+  border: 1px solid #666;
+  border-radius: 8px;
+  background: #2f2f2f;
+  color: #f5f5f5;
+  transition: transform 0.06s ease, filter 0.12s ease, opacity 0.12s ease;
+}
+
+button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px) scale(0.99);
+  filter: brightness(0.94);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  background: #242424;
+  color: #8f8f8f;
+  border-color: #4d4d4d;
 }
 
 .preview {
@@ -48,9 +70,46 @@ button {
   background: #1a1a1a;
 }
 
+.canvas-container {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 canvas {
   width: 100%;
   height: auto;
   border: 1px solid #555;
   background: #000;
+  touch-action: none;
+}
+
+@media (max-width: 768px) {
+  .container {
+    padding: 16px;
+  }
+
+  .controls {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  input,
+  select,
+  button {
+    min-height: 44px;
+    padding: 12px 14px;
+  }
+
+  button {
+    font-weight: 600;
+  }
+
+  .preview {
+    padding: 10px;
+  }
+
+  .canvas-container {
+    width: 100%;
+    overflow-x: hidden;
+  }
 }

@@ -30,6 +30,14 @@ const DITHER_CONFIG = {
 let sourceImage = null;
 let cachedFile = null;
 let renderDebounceTimer = null;
+const pointerState = {
+  isPointerDown: false,
+  pointerId: null,
+  startX: 0,
+  startY: 0,
+  lastX: 0,
+  lastY: 0,
+};
 
 export function loadImage(file) {
   if (!(file instanceof File)) {
@@ -300,3 +308,40 @@ ditherMethodSelect.addEventListener('change', scheduleRenderPreview);
 downloadButton.addEventListener('click', () => {
   exportPng(outputCanvas, 'resized-quantized.png');
 });
+
+function updatePointerStateFromEvent(event) {
+  pointerState.lastX = event.offsetX;
+  pointerState.lastY = event.offsetY;
+}
+
+function onCanvasPointerDown(event) {
+  pointerState.isPointerDown = true;
+  pointerState.pointerId = event.pointerId;
+  pointerState.startX = event.offsetX;
+  pointerState.startY = event.offsetY;
+  updatePointerStateFromEvent(event);
+  outputCanvas.setPointerCapture(event.pointerId);
+}
+
+function onCanvasPointerMove(event) {
+  if (!pointerState.isPointerDown || pointerState.pointerId !== event.pointerId) {
+    return;
+  }
+
+  updatePointerStateFromEvent(event);
+}
+
+function resetPointerState(event) {
+  if (pointerState.pointerId !== event.pointerId) {
+    return;
+  }
+
+  pointerState.isPointerDown = false;
+  pointerState.pointerId = null;
+  updatePointerStateFromEvent(event);
+}
+
+outputCanvas.addEventListener('pointerdown', onCanvasPointerDown);
+outputCanvas.addEventListener('pointermove', onCanvasPointerMove);
+outputCanvas.addEventListener('pointerup', resetPointerState);
+outputCanvas.addEventListener('pointercancel', resetPointerState);
