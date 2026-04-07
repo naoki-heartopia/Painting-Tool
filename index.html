@@ -57,6 +57,19 @@
           <input id="quantizeToggle" type="checkbox" checked />
         </label>
 
+        <label>
+          ディザリングで色表現を増やす
+          <input id="ditherToggle" type="checkbox" />
+        </label>
+
+        <label>
+          ディザリング方式
+          <select id="ditherMethodSelect">
+            <option value="floyd-steinberg">誤差拡散 (Floyd–Steinberg)</option>
+            <option value="ordered">Ordered</option>
+          </select>
+        </label>
+
         <button id="downloadButton" type="button" disabled>PNG ダウンロード</button>
       </section>
 
