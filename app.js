@@ -2,12 +2,14 @@ const imageInput = document.getElementById('imageInput');
 const ratioSelect = document.getElementById('ratioSelect');
 const sizeSelect = document.getElementById('sizeSelect');
 const fitModeSelect = document.getElementById('fitModeSelect');
-const runButton = document.getElementById('runButton');
+const quantizeToggle = document.getElementById('quantizeToggle');
 const downloadButton = document.getElementById('downloadButton');
 const outputCanvas = document.getElementById('outputCanvas');
 const outputCtx = outputCanvas.getContext('2d');
 
 let sourceImage = null;
+let cachedFile = null;
+let renderDebounceTimer = null;
 
 export function loadImage(file) {
   if (!(file instanceof File)) {
@@ -115,36 +117,65 @@ function validateRatio(size, ratioText) {
   return Math.abs(size.width / size.height - rw / rh) < 0.01;
 }
 
-runButton.addEventListener('click', async () => {
+async function renderPreview() {
   try {
     const file = imageInput.files?.[0];
     if (!file) {
-      alert('先に画像をアップロードしてください。');
+      outputCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+      downloadButton.disabled = true;
       return;
     }
 
-    sourceImage = await loadImage(file);
+    if (cachedFile !== file || !sourceImage) {
+      sourceImage = await loadImage(file);
+      cachedFile = file;
+    }
+
     const selectedSize = parseSize(sizeSelect.value);
     const mode = fitModeSelect.value;
 
     if (!validateRatio(selectedSize, ratioSelect.value)) {
-      alert('選択した比率と出力サイズが一致していません。比率に合うサイズを選んでください。');
+      outputCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+      downloadButton.disabled = true;
       return;
     }
 
     const resizedCanvas = resizeToTarget(sourceImage, selectedSize.width, selectedSize.height, mode);
-    const quantizedCanvas = quantizeToPalette(resizedCanvas);
+    const processedCanvas = quantizeToggle.checked
+      ? quantizeToPalette(resizedCanvas)
+      : resizedCanvas;
 
-    outputCanvas.width = quantizedCanvas.width;
-    outputCanvas.height = quantizedCanvas.height;
+    outputCanvas.width = processedCanvas.width;
+    outputCanvas.height = processedCanvas.height;
     outputCtx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
-    outputCtx.drawImage(quantizedCanvas, 0, 0);
+    outputCtx.drawImage(processedCanvas, 0, 0);
 
     downloadButton.disabled = false;
   } catch (error) {
     alert(error instanceof Error ? error.message : '画像処理中にエラーが発生しました。');
   }
+}
+
+function scheduleRenderPreview() {
+  if (renderDebounceTimer) {
+    clearTimeout(renderDebounceTimer);
+  }
+
+  renderDebounceTimer = setTimeout(() => {
+    renderDebounceTimer = null;
+    renderPreview();
+  }, 100);
+}
+
+imageInput.addEventListener('change', () => {
+  sourceImage = null;
+  cachedFile = null;
+  scheduleRenderPreview();
 });
+ratioSelect.addEventListener('change', scheduleRenderPreview);
+sizeSelect.addEventListener('change', scheduleRenderPreview);
+fitModeSelect.addEventListener('change', scheduleRenderPreview);
+quantizeToggle.addEventListener('change', scheduleRenderPreview);
 
 downloadButton.addEventListener('click', () => {
   exportPng(outputCanvas, 'resized-quantized.png');
