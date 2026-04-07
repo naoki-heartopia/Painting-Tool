@@ -2,7 +2,6 @@ const imageInput = document.getElementById('imageInput');
 const ratioSelect = document.getElementById('ratioSelect');
 const sizeSelect = document.getElementById('sizeSelect');
 const fitModeSelect = document.getElementById('fitModeSelect');
-const quantizeToggle = document.getElementById('quantizeToggle');
 const ditherToggle = document.getElementById('ditherToggle');
 const ditherMethodSelect = document.getElementById('ditherMethodSelect');
 const brightnessRange = document.getElementById('brightnessRange');
@@ -464,12 +463,10 @@ async function renderPreview() {
       temperature: Number(temperatureRange.value),
     });
 
-    const processedCanvas = quantizeToggle.checked
-      ? quantizeToPalette(resizedCanvas, undefined, {
-        dither: ditherToggle.checked,
-        ditherMethod: ditherMethodSelect.value,
-      })
-      : resizedCanvas;
+    const processedCanvas = quantizeToPalette(resizedCanvas, undefined, {
+      dither: ditherToggle.checked,
+      ditherMethod: ditherMethodSelect.value,
+    });
 
     outputCanvas.width = processedCanvas.width;
     outputCanvas.height = processedCanvas.height;
@@ -504,7 +501,6 @@ ratioSelect.addEventListener('change', () => {
 });
 sizeSelect.addEventListener('change', scheduleRenderPreview);
 fitModeSelect.addEventListener('change', scheduleRenderPreview);
-quantizeToggle.addEventListener('change', scheduleRenderPreview);
 ditherToggle.addEventListener('change', scheduleRenderPreview);
 ditherMethodSelect.addEventListener('change', scheduleRenderPreview);
 brightnessRange.addEventListener('input', scheduleRenderPreview);
