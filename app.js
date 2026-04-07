@@ -9,6 +9,33 @@ const downloadButton = document.getElementById('downloadButton');
 const outputCanvas = document.getElementById('outputCanvas');
 const outputCtx = outputCanvas.getContext('2d');
 
+const SIZE_PRESETS = {
+  '16:9': ['1280x720', '1920x1080'],
+  '4:3': ['1024x768'],
+  '1:1': ['1080x1080'],
+  '3:4': ['768x1024'],
+  '9:16': ['1080x1920'],
+};
+
+const DEFAULT_PALETTE_HEX = [
+  '#000000',
+  '#FFFFFF',
+  '#FF0000',
+  '#00FF00',
+  '#0000FF',
+  '#FFFF00',
+  '#00FFFF',
+  '#FF00FF',
+  '#C0C0C0',
+  '#808080',
+  '#800000',
+  '#808000',
+  '#008000',
+  '#800080',
+  '#008080',
+  '#000080',
+];
+
 const DITHER_CONFIG = {
   minAlphaToProcess: 1,
   fsErrorScale: 1,
@@ -26,6 +53,21 @@ const DITHER_CONFIG = {
   ],
   orderedStrength: 0.1,
 };
+
+function hexToRgb(hex) {
+  const normalizedHex = hex.trim().replace(/^#/, '');
+  if (!/^[0-9a-fA-F]{6}$/.test(normalizedHex)) {
+    throw new Error(`無効な16進カラーコードです: ${hex}`);
+  }
+
+  return [
+    Number.parseInt(normalizedHex.slice(0, 2), 16),
+    Number.parseInt(normalizedHex.slice(2, 4), 16),
+    Number.parseInt(normalizedHex.slice(4, 6), 16),
+  ];
+}
+
+const DEFAULT_PALETTE = DEFAULT_PALETTE_HEX.map(hexToRgb);
 
 let sourceImage = null;
 let cachedFile = null;
@@ -193,16 +235,7 @@ function quantizeWithOrderedDither(data, width, height, palette, config) {
 
 export function quantizeToPalette(
   canvas,
-  palette = [
-    [0, 0, 0],
-    [255, 255, 255],
-    [231, 76, 60],
-    [52, 152, 219],
-    [46, 204, 113],
-    [241, 196, 15],
-    [155, 89, 182],
-    [230, 126, 34],
-  ],
+  palette = DEFAULT_PALETTE,
   options = {},
 ) {
   const { dither = false, ditherMethod = 'floyd-steinberg' } = options;
@@ -238,6 +271,30 @@ function parseSize(text) {
 function validateRatio(size, ratioText) {
   const [rw, rh] = ratioText.split(':').map(Number);
   return Math.abs(size.width / size.height - rw / rh) < 0.01;
+}
+
+function formatSizeLabel(sizeText) {
+  const { width, height } = parseSize(sizeText);
+  return `${width} x ${height}`;
+}
+
+function rebuildSizeOptionsForRatio(ratio) {
+  const allowedSizes = SIZE_PRESETS[ratio] ?? [];
+  const previousValue = sizeSelect.value;
+  sizeSelect.innerHTML = '';
+
+  for (const sizeText of allowedSizes) {
+    const option = document.createElement('option');
+    option.value = sizeText;
+    option.textContent = formatSizeLabel(sizeText);
+    sizeSelect.append(option);
+  }
+
+  if (allowedSizes.includes(previousValue)) {
+    sizeSelect.value = previousValue;
+  } else if (allowedSizes.length > 0) {
+    sizeSelect.value = allowedSizes[0];
+  }
 }
 
 async function renderPreview() {
@@ -298,7 +355,10 @@ imageInput.addEventListener('change', () => {
   cachedFile = null;
   scheduleRenderPreview();
 });
-ratioSelect.addEventListener('change', scheduleRenderPreview);
+ratioSelect.addEventListener('change', () => {
+  rebuildSizeOptionsForRatio(ratioSelect.value);
+  scheduleRenderPreview();
+});
 sizeSelect.addEventListener('change', scheduleRenderPreview);
 fitModeSelect.addEventListener('change', scheduleRenderPreview);
 quantizeToggle.addEventListener('change', scheduleRenderPreview);
@@ -345,3 +405,5 @@ outputCanvas.addEventListener('pointerdown', onCanvasPointerDown);
 outputCanvas.addEventListener('pointermove', onCanvasPointerMove);
 outputCanvas.addEventListener('pointerup', resetPointerState);
 outputCanvas.addEventListener('pointercancel', resetPointerState);
+
+rebuildSizeOptionsForRatio(ratioSelect.value);
