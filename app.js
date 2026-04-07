@@ -5,6 +5,9 @@ const fitModeSelect = document.getElementById('fitModeSelect');
 const quantizeToggle = document.getElementById('quantizeToggle');
 const ditherToggle = document.getElementById('ditherToggle');
 const ditherMethodSelect = document.getElementById('ditherMethodSelect');
+const brightnessRange = document.getElementById('brightnessRange');
+const contrastRange = document.getElementById('contrastRange');
+const temperatureRange = document.getElementById('temperatureRange');
 const downloadButton = document.getElementById('downloadButton');
 const outputCanvas = document.getElementById('outputCanvas');
 const outputCtx = outputCanvas.getContext('2d');
@@ -359,6 +362,37 @@ export function quantizeToPalette(
   return canvas;
 }
 
+export function applyColorAdjustments(
+  canvas,
+  { brightness = 0, contrast = 0, temperature = 0 } = {},
+) {
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const { data } = imageData;
+
+  const brightnessOffset = (brightness / 100) * 255;
+  const contrastFactor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+  const temperatureOffset = (temperature / 100) * 64;
+  const greenTemperatureOffset = temperatureOffset * 0.2;
+
+  for (let i = 0; i < data.length; i += 4) {
+    const brightR = data[i] + brightnessOffset;
+    const brightG = data[i + 1] + brightnessOffset;
+    const brightB = data[i + 2] + brightnessOffset;
+
+    const contrastedR = (brightR - 128) * contrastFactor + 128;
+    const contrastedG = (brightG - 128) * contrastFactor + 128;
+    const contrastedB = (brightB - 128) * contrastFactor + 128;
+
+    data[i] = clampToByte(contrastedR + temperatureOffset);
+    data[i + 1] = clampToByte(contrastedG + greenTemperatureOffset);
+    data[i + 2] = clampToByte(contrastedB - temperatureOffset);
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
 export function exportPng(canvas, filename = 'output.png') {
   const link = document.createElement('a');
   link.href = canvas.toDataURL('image/png');
@@ -424,6 +458,12 @@ async function renderPreview() {
     }
 
     const resizedCanvas = resizeToTarget(sourceImage, selectedSize.width, selectedSize.height, mode);
+    applyColorAdjustments(resizedCanvas, {
+      brightness: Number(brightnessRange.value),
+      contrast: Number(contrastRange.value),
+      temperature: Number(temperatureRange.value),
+    });
+
     const processedCanvas = quantizeToggle.checked
       ? quantizeToPalette(resizedCanvas, undefined, {
         dither: ditherToggle.checked,
@@ -467,6 +507,9 @@ fitModeSelect.addEventListener('change', scheduleRenderPreview);
 quantizeToggle.addEventListener('change', scheduleRenderPreview);
 ditherToggle.addEventListener('change', scheduleRenderPreview);
 ditherMethodSelect.addEventListener('change', scheduleRenderPreview);
+brightnessRange.addEventListener('input', scheduleRenderPreview);
+contrastRange.addEventListener('input', scheduleRenderPreview);
+temperatureRange.addEventListener('input', scheduleRenderPreview);
 
 downloadButton.addEventListener('click', () => {
   exportPng(outputCanvas, 'resized-quantized.png');
