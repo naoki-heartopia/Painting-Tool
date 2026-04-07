@@ -173,6 +173,7 @@ let sourceImage = null;
 let cachedFile = null;
 let renderRafId = null;
 let renderPreviewFinalIdleTimer = null;
+let isGestureActive = false;
 let processedBaseCanvas = null;
 let processedBaseColorKey = '';
 let processedBaseSourceImage = null;
@@ -786,6 +787,12 @@ function scheduleRenderPreviewFinal() {
 
   if (renderPreviewFinalIdleTimer) {
     clearTimeout(renderPreviewFinalIdleTimer);
+    renderPreviewFinalIdleTimer = null;
+  }
+
+  if (isGestureActive) {
+    pendingFinalRenderGeneration = generation;
+    return;
   }
 
   pendingFinalRenderGeneration = generation;
@@ -934,6 +941,11 @@ function getPointerDistance(firstPointer, secondPointer) {
 function onCanvasPointerDown(event) {
   updatePointerStateFromEvent(event);
   outputCanvas.setPointerCapture(event.pointerId);
+  isGestureActive = true;
+  if (renderPreviewFinalIdleTimer) {
+    clearTimeout(renderPreviewFinalIdleTimer);
+    renderPreviewFinalIdleTimer = null;
+  }
 
   if (pointerState.activePointers.size === 2) {
     const [firstPointer, secondPointer] = getActivePointers();
@@ -991,7 +1003,10 @@ function onCanvasPointerMove(event) {
 
 function resetPointerState(event) {
   removePointerFromState(event);
-  scheduleRenderPreviewFinal();
+  if (pointerState.activePointers.size === 0 && isGestureActive) {
+    isGestureActive = false;
+    scheduleRenderPreviewFinal();
+  }
 }
 
 outputCanvas.addEventListener('pointerdown', onCanvasPointerDown);
