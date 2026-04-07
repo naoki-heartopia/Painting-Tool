@@ -177,6 +177,12 @@ const DEFAULT_PALETTE = DEFAULT_PALETTE_HEX.map(hexToRgb);
 let sourceImage = null;
 let cachedFile = null;
 let renderDebounceTimer = null;
+const viewTransform = {
+  cropX: 0.5,
+  cropY: 0.5,
+  panX: 0,
+  panY: 0,
+};
 const pointerState = {
   isPointerDown: false,
   pointerId: null,
@@ -204,7 +210,44 @@ export function loadImage(file) {
   });
 }
 
-export function resizeToTarget(image, targetWidth, targetHeight, mode = 'fit') {
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function normalizeCropCoordinate(value) {
+  const safeValue = Number.isFinite(value) ? value : 0.5;
+  return clamp(safeValue, 0, 1);
+}
+
+function resolveFillSourceRect(image, targetWidth, targetHeight, transform = {}) {
+  const scale = Math.max(targetWidth / image.width, targetHeight / image.height);
+  const sourceWidth = targetWidth / scale;
+  const sourceHeight = targetHeight / scale;
+  const maxSourceX = Math.max(0, image.width - sourceWidth);
+  const maxSourceY = Math.max(0, image.height - sourceHeight);
+
+  const normalizedCropX = normalizeCropCoordinate(transform.cropX);
+  const normalizedCropY = normalizeCropCoordinate(transform.cropY);
+  const hasPanOffset = Number.isFinite(transform.panX) || Number.isFinite(transform.panY);
+
+  const sourceX = hasPanOffset
+    ? clamp((image.width - sourceWidth) / 2 + (transform.panX ?? 0), 0, maxSourceX)
+    : clamp(normalizedCropX * maxSourceX, 0, maxSourceX);
+  const sourceY = hasPanOffset
+    ? clamp((image.height - sourceHeight) / 2 + (transform.panY ?? 0), 0, maxSourceY)
+    : clamp(normalizedCropY * maxSourceY, 0, maxSourceY);
+
+  return {
+    sourceX,
+    sourceY,
+    sourceWidth,
+    sourceHeight,
+    maxSourceX,
+    maxSourceY,
+  };
+}
+
+export function resizeToTarget(image, targetWidth, targetHeight, mode = 'fit', transform = {}) {
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = targetWidth;
   tempCanvas.height = targetHeight;
@@ -215,17 +258,31 @@ export function resizeToTarget(image, targetWidth, targetHeight, mode = 'fit') {
     return tempCanvas;
   }
 
-  const scaleX = targetWidth / image.width;
-  const scaleY = targetHeight / image.height;
-  const scale = mode === 'fill' ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, targetWidth, targetHeight);
 
+  if (mode === 'fill') {
+    const sourceRect = resolveFillSourceRect(image, targetWidth, targetHeight, transform);
+    ctx.drawImage(
+      image,
+      sourceRect.sourceX,
+      sourceRect.sourceY,
+      sourceRect.sourceWidth,
+      sourceRect.sourceHeight,
+      0,
+      0,
+      targetWidth,
+      targetHeight,
+    );
+    return tempCanvas;
+  }
+
+  const scale = Math.min(targetWidth / image.width, targetHeight / image.height);
   const drawWidth = image.width * scale;
   const drawHeight = image.height * scale;
   const offsetX = (targetWidth - drawWidth) / 2;
   const offsetY = (targetHeight - drawHeight) / 2;
 
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, targetWidth, targetHeight);
   ctx.drawImage(image, offsetX, offsetY, drawWidth, drawHeight);
 
   return tempCanvas;
@@ -456,7 +513,13 @@ async function renderPreview() {
       return;
     }
 
-    const resizedCanvas = resizeToTarget(sourceImage, selectedSize.width, selectedSize.height, mode);
+    const resizedCanvas = resizeToTarget(
+      sourceImage,
+      selectedSize.width,
+      selectedSize.height,
+      mode,
+      viewTransform,
+    );
     applyColorAdjustments(resizedCanvas, {
       brightness: Number(brightnessRange.value),
       contrast: Number(contrastRange.value),
@@ -493,6 +556,10 @@ function scheduleRenderPreview() {
 imageInput.addEventListener('change', () => {
   sourceImage = null;
   cachedFile = null;
+  viewTransform.cropX = 0.5;
+  viewTransform.cropY = 0.5;
+  viewTransform.panX = 0;
+  viewTransform.panY = 0;
   scheduleRenderPreview();
 });
 ratioSelect.addEventListener('change', () => {
@@ -530,7 +597,44 @@ function onCanvasPointerMove(event) {
     return;
   }
 
+  const selectedSize = parseSize(sizeSelect.value);
+  if (!sourceImage || fitModeSelect.value !== 'fill' || !validateRatio(selectedSize, ratioSelect.value)) {
+    updatePointerStateFromEvent(event);
+    return;
+  }
+
+  const sourceRect = resolveFillSourceRect(sourceImage, selectedSize.width, selectedSize.height, viewTransform);
+  const deltaX = event.offsetX - pointerState.lastX;
+  const deltaY = event.offsetY - pointerState.lastY;
+  const outputToSourceScaleX = sourceRect.sourceWidth / selectedSize.width;
+  const outputToSourceScaleY = sourceRect.sourceHeight / selectedSize.height;
+
+  viewTransform.panX = clamp(
+    viewTransform.panX - deltaX * outputToSourceScaleX,
+    -((sourceImage.width - sourceRect.sourceWidth) / 2),
+    (sourceImage.width - sourceRect.sourceWidth) / 2,
+  );
+  viewTransform.panY = clamp(
+    viewTransform.panY - deltaY * outputToSourceScaleY,
+    -((sourceImage.height - sourceRect.sourceHeight) / 2),
+    (sourceImage.height - sourceRect.sourceHeight) / 2,
+  );
+
+  const maxSourceX = sourceRect.maxSourceX;
+  const maxSourceY = sourceRect.maxSourceY;
+  if (maxSourceX > 0) {
+    viewTransform.cropX = normalizeCropCoordinate(
+      (((sourceImage.width - sourceRect.sourceWidth) / 2) + viewTransform.panX) / maxSourceX,
+    );
+  }
+  if (maxSourceY > 0) {
+    viewTransform.cropY = normalizeCropCoordinate(
+      (((sourceImage.height - sourceRect.sourceHeight) / 2) + viewTransform.panY) / maxSourceY,
+    );
+  }
+
   updatePointerStateFromEvent(event);
+  scheduleRenderPreview();
 }
 
 function resetPointerState(event) {
